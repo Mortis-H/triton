@@ -35,6 +35,15 @@ public:
         mlir::LLVM::AMD::getCacheModifierFlagsForLoadStore(
             loadOp.getCache(), mlir::LLVM::AMD::MemoryOp::Load);
 
+    auto emitWaitcntAfter = [&](Operation *op) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointAfter(op);
+      mlir::triton::GCNBuilder waitcntBuilder;
+      waitcntBuilder.create("s_waitcnt vmcnt(0)")->operator()();
+      waitcntBuilder.launch(rewriter, op->getLoc(),
+                            void_ty(rewriter.getContext()));
+    };
+
     auto createLoadWithAttrs = [&](Location loadLoc) -> LLVM::LoadOp {
       auto load =
           LLVM::LoadOp::create(rewriter, loadLoc, elemTy, ptr, /*alignment*/ 0,
@@ -49,6 +58,7 @@ public:
 
     if (useDirectLoad) {
       auto llvmLoadOp = createLoadWithAttrs(loc);
+      emitWaitcntAfter(llvmLoadOp.getOperation());
       rewriter.replaceOp(loadOp, llvmLoadOp.getResult());
       return success();
     }
@@ -69,6 +79,8 @@ public:
     //              | 0/1       | 1       | (cg) global load nt
     //              | 1         | 0       | (cv) flat load sc0 sc1
     auto llvmLoadOp = createLoadWithAttrs(loc);
+    emitWaitcntAfter(llvmLoadOp.getOperation());
+    rewriter.setInsertionPointToEnd(trueBlock);
     LLVM::BrOp::create(rewriter, loc, ValueRange{llvmLoadOp->getResult(0)},
                        afterLoad);
 
